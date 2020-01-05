@@ -13,6 +13,7 @@
 #include <mutex>
 #include "TaskQueue.h"
 #include "sha256.h"
+#include <mpi.h>
 
 using namespace std;
 
@@ -118,38 +119,64 @@ void printBlockChain(vector<block*> OfficialBlocks) {
 	}
 }
 
-int main()
+int main(int argc, char* argv[])
 {
+	int rank, size;
+	MPI_Init(&argc, &argv);
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &size);
+
 	rngEngine* rng = new rngEngine(2);	//rng engine, vsak mpi node bo dobil svoj seed
 	vector<block*> OfficialBlocks;	//najdeni bloki
-	//int difficulty = 20;
 	int threadsLmt = thread::hardware_concurrency();
-	//threadsLmt = 1;
+	string blockData;
 
 	shared_mutex smtx;
 	auto progstart = std::chrono::high_resolution_clock::now();	//čas izvajanja programa
 	int hasheschechked = 0;	//število predelanih hashov na tem vozlišču
 	for (int r = 0; r < 10; r++) {
-		block* tmp = new block();
-		fillData(tmp, OfficialBlocks);
+
+		//MASTER
+		if (rank == 0) {
+			block* tmp = new block();
+			fillData(tmp, OfficialBlocks);
+
+			blockData = to_string(tmp->index) + tmp->data + tmp->timestamp + tmp->previoushash + to_string(0);
+			int hashSize = blockData.length();
+
+			for (int i = 1; i < size; i++) {
+				MPI_Send(&hashSize, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
+			}
+			for (int i = 1; i < size; i++) {
+				MPI_Send(blockData.c_str(), hashSize, MPI_CHAR, i, 0, MPI_COMM_WORLD);
+				cout << "POSLANO" << endl;
+			}
+		}
+
+		//SLAVE
+		if (rank != 0) {
+			int hashSize;
+			MPI_Recv(&hashSize, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+			char* data = new char[hashSize];
+			MPI_Recv(data, hashSize, MPI_CHAR, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+			blockData = data;
+			cout << rank << " PREJETO " << endl;
+		}
+
 
 		TaskQueue* tpp = new TaskQueue(threadsLmt);	//Ustvarim threade
 		for (int j = 0; j < threadsLmt; j++) {	//vsak thread dobi nalogo da rudari blok
 			tpp->AddJob([&] {
-				//cout << "Computing...\n";
-				smtx.lock_shared();
-				int tIndex = tmp->index;
-				string tData = tmp->data;
-				string tTimestamp = tmp->timestamp;
-				string tPrevioushash = tmp->previoushash;
-				smtx.unlock_shared();
-
 				int calcNonce = 0;
+
 				// MineBlock
 				while (true) {
 					calcNonce = rng->generateNumInt();	//generiram nonce
+
 					//Pridobim sha256 hash
-					string src_str = to_string(tIndex) + tData + tTimestamp + tPrevioushash + to_string(calcNonce);
+					string src_str = "";
+					src_str = blockData + to_string(calcNonce);
 
 					smtx.lock_shared();
 					string hash_hex_str = sha256(src_str); //pridobim hash
@@ -159,12 +186,19 @@ int main()
 
 					if (ref == "00000") {	//ko najde primeren hash
 						smtx.lock_shared();
-						tmp->nonce = calcNonce;
-						tmp->hash = hash_hex_str;
-						OfficialBlocks.push_back(tmp);
+						//tmp->nonce = calcNonce;
+						//tmp->hash = hash_hex_str;
+						cout << hash_hex_str << endl;
+						cout << "Rank:" << rank << endl;
+						//sporoci da je najdel resitev
+
+						//OfficialBlocks.push_back(tmp);
 						smtx.unlock_shared();
 						break;
 					}
+
+					//preveri ce je kdo ze nasel resitev
+
 
 					if (tpp->checkThreadCloseSignal()) {	//vsi ostali threadi so seznanjeni da je bil hash za ta blok že najden
 						break;
@@ -187,21 +221,11 @@ int main()
 	double progtime = std::chrono::duration_cast<std::chrono::nanoseconds>(progfinish - progstart).count();
 	double ptime = progtime / 1000000000.0;
 
+	MPI_Finalize();
+
 	cout << "Time requred =" << ptime << "s" << endl;
 	cout << "HashesChecked =" << hasheschechked << endl;
 	cout << "Hashes per sec = " << hasheschechked / ptime << endl << endl;
 
 	return 0;
 }
-
-// Run program: Ctrl + F5 or Debug > Start Without Debugging menu
-// Debug program: F5 or Debug > Start Debugging menu
-
-// Tips for Getting Started: 
-//   1. Use the Solution Explorer window to add/manage files
-//   2. Use the Team Explorer window to connect to source control
-//   3. Use the Output window to see build output and other messages
-//   4. Use the Error List window to view errors
-//   5. Go to Project > Add New Item to create new code files, or Project > Add Existing Item to add existing code files to the project
-//   6. In the future, to open this project again, go to File > Open > Project and select the .sln file
-
