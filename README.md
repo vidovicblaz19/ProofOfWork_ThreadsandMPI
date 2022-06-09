@@ -1,5 +1,5 @@
 # ProofOfWork_ThreadsandMPI
-Quick and dirty implemetation of Proof-of-work algorithm with threads and OpenMPI
+Implemetation of Proof-of-work algorithm with threads and OpenMPI
 
 Compile:
 
